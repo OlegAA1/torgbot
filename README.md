@@ -15,6 +15,11 @@ cp .env.example .env   # вписать API_KEY / API_SECRET демо-среды
 Ключи создаются внутри Demo Trading на bybit.com (Profile → API → Create New Key),
 права — только **Read + Trade**. Ключи живут только в `.env` (файл в `.gitignore`).
 
+**Telegram-уведомления** (необязательно): создать бота у @BotFather, узнать свой
+chat_id у @userinfobot, вписать `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID` в `.env`
+и один раз написать своему боту любое сообщение (иначе Telegram не даст ему писать вам).
+Что присылать — флаги `NOTIFY_SIGNALS` / `NOTIFY_TRADES` в `bot/config.py`.
+
 ⚠️ **Bybit блокирует ряд стран/IP на уровне CloudFront** (в т.ч. IP этой машины на момент
 сборки). Если REST отвечает `403 ... blocked access from your country` — нужен VPN.
 
@@ -43,6 +48,7 @@ bot/signals.py     объединение условий в сигнал long/sh
 bot/risk.py        размер позиции (1% риска), SL/TP (R:R 1:2), лимиты, kill switch, кулдаун
 bot/executor.py    ордера через API v5 (demo=True), округление qty по qtyStep
 bot/journal.py     journal/signals.csv (каждая проверка) + journal/trades.csv (итоги сделок)
+bot/notifier.py    Telegram-уведомления (сигналы, сделки, kill switch, старт/стоп)
 bot/main.py        главный цикл
 tools/check_indicators.py  сверка индикаторов + самопроверка MACD
 ```

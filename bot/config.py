@@ -44,6 +44,10 @@ MAX_CONSEC_STOPS_PER_DAY = 3  # kill switch: N стопов подряд -> ст
 COOLDOWN_BARS = 4           # пауза после закрытия сделки по символу, в свечах SIGNAL_TF
 FALLBACK_BALANCE_USDT = 10000.0  # для dry-run без ключей (расчёт размера позиции)
 
+# --- Telegram-уведомления (TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID — в .env) ---
+NOTIFY_SIGNALS = True   # сигналы, dry-run планы, пропуски по риск-лимитам
+NOTIFY_TRADES = True    # открытие/закрытие сделок, kill switch, старт/остановка бота
+
 # --- Служебное ---
 # Публичные kline-стримы в демо-среде Bybit совпадают с mainnet
 # (stream-demo гарантирует только приватные каналы), поэтому публичный WS

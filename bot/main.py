@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 from pybit.unified_trading import HTTP
 
 from bot import config as cfg
-from bot import risk, signals
+from bot import notifier, risk, signals
 from bot.data import MarketData
 from bot.executor import Executor
 from bot.journal import Journal, utcnow
@@ -64,6 +64,8 @@ class Bot:
             raise SystemExit("DRY_RUN=False, но ключей нет — заполните .env")
 
         self.http = HTTP(demo=cfg.DEMO, api_key=api_key or None, api_secret=api_secret or None)
+        self.notify = notifier.Notifier(os.getenv("TELEGRAM_BOT_TOKEN", ""),
+                                        os.getenv("TELEGRAM_CHAT_ID", ""))
         self.market = MarketData(self.http)
         self.executor = Executor(self.http)
         self.journal = Journal(ROOT / cfg.JOURNAL_DIR)
@@ -124,7 +126,15 @@ class Bot:
             sl=meta.get("sl"), tp=meta.get("tp"),
             pnl=pnl, close_reason=reason,
         )
+        kill_before = self.risk.kill_switch_day
         self.risk.on_trade_closed(symbol, pnl, closed_at)
+        if cfg.NOTIFY_TRADES:
+            duration = None
+            if meta.get("opened_ts"):
+                duration = (closed_at - meta["opened_ts"]).total_seconds() / 60
+            self.notify.send(notifier.fmt_close(symbol, meta["side"], pnl, reason, duration))
+            if self.risk.kill_switch_day and self.risk.kill_switch_day != kill_before:
+                self.notify.send(notifier.fmt_kill_switch(self.risk.kill_switch_day))
 
     @staticmethod
     def _close_reason(exit_price: float, meta: dict) -> str:
@@ -149,10 +159,14 @@ class Bot:
                  s.direction.upper(), symbol, s.close, s.vol_ratio,
                  s.level_price, s.level_kind, (s.level_dist_pct or 0) * 100,
                  s.cross_dir, s.cross_age, s.hist_impulse, s.trend_4h)
+        if cfg.NOTIFY_SIGNALS:
+            self.notify.send(notifier.fmt_signal(s))
 
         allowed, deny = self.risk.can_open(symbol, utcnow())
         if not allowed:
             log.info("сделка не открыта: %s", deny)
+            if cfg.NOTIFY_SIGNALS:
+                self.notify.send(notifier.fmt_skip(s, deny))
             self.journal.log_check(s, skip_reason=deny)
             return
 
@@ -168,12 +182,16 @@ class Bot:
                                      balance, inst["qty_step"], inst["min_qty"])
         if plan is None:
             log.info("сделка не открыта: %s", deny)
+            if cfg.NOTIFY_SIGNALS:
+                self.notify.send(notifier.fmt_skip(s, deny))
             self.journal.log_check(s, skip_reason=deny)
             return
 
         if cfg.DRY_RUN:
             log.info("[DRY-RUN] %s %s qty=%s SL=%s TP=%s (риск %.2f USDT)",
                      plan.side, symbol, plan.qty, plan.stop_loss, plan.take_profit, plan.risk_usdt)
+            if cfg.NOTIFY_SIGNALS:
+                self.notify.send(notifier.fmt_plan(plan, dry_run=True))
             self.journal.log_check(s, trade_opened=False, skip_reason="dry_run",
                                    qty=plan.qty, entry=plan.entry,
                                    sl=plan.stop_loss, tp=plan.take_profit)
@@ -181,6 +199,9 @@ class Bot:
 
         order_id = self.executor.place_market(plan)
         opened = order_id is not None
+        if cfg.NOTIFY_TRADES:
+            self.notify.send(notifier.fmt_plan(plan, dry_run=False) if opened
+                             else f"⚠️ Ошибка API при выставлении ордера {plan.side} {symbol} — см. logs/errors.log")
         if opened:
             self.tracked[symbol] = {
                 "side": plan.side, "qty": plan.qty, "entry": plan.entry,
@@ -206,6 +227,8 @@ class Bot:
     def run(self) -> None:
         mode = "DRY-RUN (только сигналы)" if cfg.DRY_RUN else "ДЕМО-ТОРГОВЛЯ"
         log.info("старт бота: %s | %s | ТФ %sm/%sm", mode, cfg.SYMBOLS, cfg.SIGNAL_TF, cfg.TREND_TF)
+        if cfg.NOTIFY_TRADES:
+            self.notify.send(f"🤖 Бот запущен: {mode}\n{', '.join(cfg.SYMBOLS)} | ТФ {cfg.SIGNAL_TF}m/{cfg.TREND_TF}m")
         self.executor.load_instruments()
         self.market.load_history()
         self.sync_positions()
@@ -257,6 +280,9 @@ def main() -> None:
                       "Нужен VPN не из заблокированного региона. Ошибка: %s", e)
         else:
             log.exception("фатальная ошибка при запуске")
+        if cfg.NOTIFY_TRADES:
+            bot.notify.send(f"💀 Бот остановлен из-за ошибки: {e}")
+            time.sleep(3)  # даём потоку уведомлений отправить сообщение
         raise SystemExit(1)
 
 
