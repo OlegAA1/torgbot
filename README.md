@@ -1,6 +1,6 @@
 # torgbot — торговый бот на демо-счёте Bybit
 
-Торгует BTC / ETH / SOL / XRP (USDT-перпетуалы, `category=linear`) по сигналам:
+Торгует BTC / ETH / SOL / XRP / DOGE (USDT-перпетуалы, `category=linear`) по сигналам:
 Дополнительно наблюдает TradFi-перпетуалы (NVDA, TSLA, AAPL, GOOGL, META, AMZN,
 MSFT) в режиме watch-only (`WATCH_ONLY_SYMBOLS` в config: сигналы и журнал есть,
 торговли нет никогда). Символы, которых нет на бирже, исключаются на старте
