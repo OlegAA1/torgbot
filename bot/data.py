@@ -40,7 +40,7 @@ class MarketData:
     # ---------- REST ----------
 
     def load_history(self) -> None:
-        for symbol in cfg.SYMBOLS:
+        for symbol in cfg.ALL_SYMBOLS:
             for interval in (cfg.SIGNAL_TF, cfg.TREND_TF):
                 resp = self.http.get_kline(
                     category=cfg.CATEGORY, symbol=symbol,
@@ -66,14 +66,14 @@ class MarketData:
             testnet=False, demo=cfg.WS_PUBLIC_DEMO, channel_type=cfg.CATEGORY,
             retries=20, restart_on_error=True,
         )
-        for symbol in cfg.SYMBOLS:
+        for symbol in cfg.ALL_SYMBOLS:
             for interval in (cfg.SIGNAL_TF, cfg.TREND_TF):
                 self._ws.kline_stream(
                     interval=int(interval), symbol=symbol,
                     callback=self._on_kline,
                 )
         log.info("WebSocket: подписка на kline %s x %s",
-                 cfg.SYMBOLS, [cfg.SIGNAL_TF, cfg.TREND_TF])
+                 cfg.ALL_SYMBOLS, [cfg.SIGNAL_TF, cfg.TREND_TF])
 
     def _on_kline(self, msg: dict) -> None:
         self._last_ws_msg = time.time()

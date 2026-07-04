@@ -162,6 +162,24 @@ class Bot:
         if cfg.NOTIFY_SIGNALS:
             self.notify.send(notifier.fmt_signal(s))
 
+        if symbol in cfg.WATCH_ONLY_SYMBOLS:
+            # только наблюдение: считаем план для журнала, но не торгуем никогда
+            inst = self.executor.instruments[symbol]
+            plan, _ = risk.build_plan(symbol, s.direction, s.close, s.level_price,
+                                      cfg.FALLBACK_BALANCE_USDT,
+                                      inst["qty_step"], inst["min_qty"])
+            if plan is not None:
+                log.info("[WATCH-ONLY] %s %s qty=%s SL=%s TP=%s",
+                         plan.side, symbol, plan.qty, plan.stop_loss, plan.take_profit)
+                if cfg.NOTIFY_SIGNALS:
+                    self.notify.send(notifier.fmt_plan(plan, "watch_only"))
+                self.journal.log_check(s, skip_reason="watch_only",
+                                       qty=plan.qty, entry=plan.entry,
+                                       sl=plan.stop_loss, tp=plan.take_profit)
+            else:
+                self.journal.log_check(s, skip_reason="watch_only")
+            return
+
         allowed, deny = self.risk.can_open(symbol, utcnow())
         if not allowed:
             log.info("сделка не открыта: %s", deny)
@@ -191,7 +209,7 @@ class Bot:
             log.info("[DRY-RUN] %s %s qty=%s SL=%s TP=%s (риск %.2f USDT)",
                      plan.side, symbol, plan.qty, plan.stop_loss, plan.take_profit, plan.risk_usdt)
             if cfg.NOTIFY_SIGNALS:
-                self.notify.send(notifier.fmt_plan(plan, dry_run=True))
+                self.notify.send(notifier.fmt_plan(plan, "dry_run"))
             self.journal.log_check(s, trade_opened=False, skip_reason="dry_run",
                                    qty=plan.qty, entry=plan.entry,
                                    sl=plan.stop_loss, tp=plan.take_profit)
@@ -200,7 +218,7 @@ class Bot:
         order_id = self.executor.place_market(plan)
         opened = order_id is not None
         if cfg.NOTIFY_TRADES:
-            self.notify.send(notifier.fmt_plan(plan, dry_run=False) if opened
+            self.notify.send(notifier.fmt_plan(plan, "opened") if opened
                              else f"⚠️ Ошибка API при выставлении ордера {plan.side} {symbol} — см. logs/errors.log")
         if opened:
             self.tracked[symbol] = {
@@ -220,7 +238,7 @@ class Bot:
         self.executor.load_instruments()
         self.market.load_history()
         self.sync_positions()
-        for symbol in cfg.SYMBOLS:
+        for symbol in cfg.ALL_SYMBOLS:
             self.on_closed_bar(symbol)
         log.info("разовый прогон завершён, журнал: %s", self.journal.signals_path)
 
@@ -228,7 +246,8 @@ class Bot:
         mode = "DRY-RUN (только сигналы)" if cfg.DRY_RUN else "ДЕМО-ТОРГОВЛЯ"
         log.info("старт бота: %s | %s | ТФ %sm/%sm", mode, cfg.SYMBOLS, cfg.SIGNAL_TF, cfg.TREND_TF)
         if cfg.NOTIFY_TRADES:
-            self.notify.send(f"🤖 Бот запущен: {mode}\n{', '.join(cfg.SYMBOLS)} | ТФ {cfg.SIGNAL_TF}m/{cfg.TREND_TF}m")
+            watch = f"\nWatch-only: {', '.join(cfg.WATCH_ONLY_SYMBOLS)}" if cfg.WATCH_ONLY_SYMBOLS else ""
+            self.notify.send(f"🤖 Бот запущен: {mode}\n{', '.join(cfg.SYMBOLS)} | ТФ {cfg.SIGNAL_TF}m/{cfg.TREND_TF}m{watch}")
         self.executor.load_instruments()
         self.market.load_history()
         self.sync_positions()

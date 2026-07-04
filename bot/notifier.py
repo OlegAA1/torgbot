@@ -77,8 +77,15 @@ def fmt_signal(s: SignalCheck) -> str:
     return "\n".join(lines)
 
 
-def fmt_plan(plan: TradePlan, dry_run: bool) -> str:
-    head = "📋 [DRY-RUN] Сделка НЕ открыта (режим сигналов)" if dry_run else "✅ Открыта сделка (демо)"
+PLAN_HEADS = {
+    "dry_run": "📋 [DRY-RUN] Сделка НЕ открыта (режим сигналов)",
+    "watch_only": "👀 [WATCH-ONLY] Наблюдаемый символ, торговля по нему выключена",
+    "opened": "✅ Открыта сделка (демо)",
+}
+
+
+def fmt_plan(plan: TradePlan, mode: str) -> str:
+    head = PLAN_HEADS[mode]
     return (f"{head}\n"
             f"{plan.side} {plan.symbol} qty={plan.qty}\n"
             f"Вход ≈ {plan.entry}\nSL: {plan.stop_loss}\nTP: {plan.take_profit}\n"

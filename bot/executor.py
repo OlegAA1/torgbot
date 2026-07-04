@@ -43,7 +43,7 @@ class Executor:
     # ---------- справочная информация ----------
 
     def load_instruments(self) -> None:
-        for symbol in cfg.SYMBOLS:
+        for symbol in cfg.ALL_SYMBOLS:
             res = self._call("get_instruments_info", self.http.get_instruments_info,
                              category=cfg.CATEGORY, symbol=symbol)
             info = res["list"][0]
