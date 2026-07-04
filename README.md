@@ -53,6 +53,22 @@ bot/main.py        главный цикл
 tools/check_indicators.py  сверка индикаторов + самопроверка MACD
 ```
 
+## Деплой на VPS (Ubuntu)
+
+```bash
+sudo apt update && sudo apt install -y git python3-venv
+git clone https://github.com/OlegAA1/torgbot.git && cd torgbot
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cp .env.example .env && nano .env      # ключи демо-API + Telegram
+chmod 600 .env
+.venv/bin/python -m bot.main --once    # проверка пайплайна
+bash deploy/install.sh                 # systemd-сервис с автозапуском
+```
+
+Логи: `journalctl -u torgbot -f`. Перед установкой проверить, что Bybit не
+гео-блокирует IP сервера: `curl https://api-demo.bybit.com/v5/market/time`
+должен вернуть JSON, а не ошибку CloudFront.
+
 ## Жёсткие правила (зашиты в код)
 
 - риск 1% баланса на сделку, SL сразу в ордере, TP = 2R;

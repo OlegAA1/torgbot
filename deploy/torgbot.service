@@ -1,0 +1,16 @@
+[Unit]
+Description=torgbot - Bybit demo trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__DIR__/.venv/bin/python -m bot.main
+Restart=always
+RestartSec=15
+# бот подхватывает открытые позиции и state.json при рестарте, автоперезапуск безопасен
+
+[Install]
+WantedBy=multi-user.target
