@@ -9,6 +9,7 @@ Telegram не блокирует главный цикл и не роняет б
 import logging
 import queue
 import threading
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -19,6 +20,13 @@ from bot.signals import SignalCheck
 log = logging.getLogger("bot.notifier")
 
 API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+
+NOTIFY_TZ = timezone(timedelta(hours=cfg.NOTIFY_TZ_OFFSET_HOURS))
+
+
+def _local(dt: datetime) -> str:
+    """ЧЧ:ММ:СС в поясе уведомлений (журнал и логи остаются в UTC)."""
+    return dt.astimezone(NOTIFY_TZ).strftime("%H:%M:%S")
 
 
 class Notifier:
@@ -36,6 +44,7 @@ class Notifier:
     def send(self, text: str) -> None:
         if not self.enabled:
             return
+        text += f"\n🕒 {_local(datetime.now(timezone.utc))} {cfg.NOTIFY_TZ_LABEL}"
         try:
             self._q.put_nowait(text)
         except queue.Full:
@@ -65,8 +74,10 @@ class Notifier:
 
 def fmt_signal(s: SignalCheck) -> str:
     arrow = "🟢 LONG" if s.direction == "long" else "🔴 SHORT"
+    candle_close = s.ts.to_pydatetime() + timedelta(minutes=int(s.tf))
     lines = [
         f"{arrow} сигнал {s.symbol} ({s.tf}m)",
+        f"Свеча: {_local(s.ts.to_pydatetime())}–{_local(candle_close)} {cfg.NOTIFY_TZ_LABEL}",
         f"Цена: {s.close}",
         f"Объём: x{s.vol_ratio:.2f} от SMA{cfg.VOL_SMA_PERIOD}",
         f"Уровень: {s.level_kind} {s.level_price:.2f}"
