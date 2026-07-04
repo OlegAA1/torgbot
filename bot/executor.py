@@ -42,11 +42,20 @@ class Executor:
 
     # ---------- справочная информация ----------
 
-    def load_instruments(self) -> None:
+    def load_instruments(self) -> list[str]:
+        """Загружает фильтры инструментов. Возвращает символы, которых нет на бирже."""
+        missing: list[str] = []
         for symbol in cfg.ALL_SYMBOLS:
-            res = self._call("get_instruments_info", self.http.get_instruments_info,
-                             category=cfg.CATEGORY, symbol=symbol)
-            info = res["list"][0]
+            try:
+                res = self._call("get_instruments_info", self.http.get_instruments_info,
+                                 category=cfg.CATEGORY, symbol=symbol)
+                if not res["list"]:
+                    raise ApiError(f"{symbol}: биржа не знает такой символ")
+                info = res["list"][0]
+            except Exception as e:
+                log.warning("инструмент %s недоступен (%s) — исключаю из работы", symbol, e)
+                missing.append(symbol)
+                continue
             self.instruments[symbol] = {
                 "qty_step": float(info["lotSizeFilter"]["qtyStep"]),
                 "min_qty": float(info["lotSizeFilter"]["minOrderQty"]),
@@ -56,6 +65,7 @@ class Executor:
                      self.instruments[symbol]["qty_step"],
                      self.instruments[symbol]["min_qty"],
                      self.instruments[symbol]["tick_size"])
+        return missing
 
     def balance_usdt(self) -> float:
         res = self._call("get_wallet_balance", self.http.get_wallet_balance,

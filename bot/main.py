@@ -233,9 +233,23 @@ class Bot:
 
     # ---------- циклы ----------
 
+    def _load_instruments_and_prune(self) -> None:
+        """Убирает из работы символы, которых нет на бирже (например, ещё не залистены)."""
+        missing = self.executor.load_instruments()
+        for sym in missing:
+            for lst in (cfg.SYMBOLS, cfg.WATCH_ONLY_SYMBOLS, cfg.ALL_SYMBOLS):
+                if sym in lst:
+                    lst.remove(sym)
+        if missing:
+            msg = f"⚠️ Символы недоступны на бирже и исключены: {', '.join(missing)}"
+            log.warning(msg)
+            self.notify.send(msg)
+        if not cfg.ALL_SYMBOLS:
+            raise RuntimeError("ни один символ не доступен — проверьте сеть/гео-блок и список SYMBOLS")
+
     def run_once(self) -> None:
         """Разовый прогон по REST-истории: проверка пайплайна без ожидания свечей."""
-        self.executor.load_instruments()
+        self._load_instruments_and_prune()
         self.market.load_history()
         self.sync_positions()
         for symbol in cfg.ALL_SYMBOLS:
@@ -245,10 +259,10 @@ class Bot:
     def run(self) -> None:
         mode = "DRY-RUN (только сигналы)" if cfg.DRY_RUN else "ДЕМО-ТОРГОВЛЯ"
         log.info("старт бота: %s | %s | ТФ %sm/%sm", mode, cfg.SYMBOLS, cfg.SIGNAL_TF, cfg.TREND_TF)
+        self._load_instruments_and_prune()
         if cfg.NOTIFY_TRADES:
             watch = f"\nWatch-only: {', '.join(cfg.WATCH_ONLY_SYMBOLS)}" if cfg.WATCH_ONLY_SYMBOLS else ""
             self.notify.send(f"🤖 Бот запущен: {mode}\n{', '.join(cfg.SYMBOLS)} | ТФ {cfg.SIGNAL_TF}m/{cfg.TREND_TF}m{watch}")
-        self.executor.load_instruments()
         self.market.load_history()
         self.sync_positions()
         self.market.start_ws()
