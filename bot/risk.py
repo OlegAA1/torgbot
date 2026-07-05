@@ -34,23 +34,59 @@ class TradePlan:
 
 
 def build_plan(symbol: str, direction: str, price: float, level_price: float,
-               balance: float, qty_step: float, min_qty: float) -> tuple[TradePlan | None, str]:
-    """Размер позиции = риск / расстояние до стопа. Возвращает (план, причина отказа)."""
+               balance: float, qty_step: float, min_qty: float,
+               atr: float | None = None, open_notional: float = 0.0) -> tuple[TradePlan | None, str]:
+    """Размер позиции = риск / расстояние до стопа. Возвращает (план, причина отказа).
+
+    Стоп ближе max(MIN_SL_ATR_MULT*ATR, MIN_SL_PCT*цена) отодвигается до минимума
+    (qty при этом пересчитывается). Notional капится: одна позиция <=
+    MAX_POS_NOTIONAL_PCT баланса, все вместе <= MAX_TOTAL_NOTIONAL_PCT
+    (open_notional — сумма qty*entry уже открытых позиций).
+    """
+    # сторона уровня: лонг только над уровнем, шорт только под ним
+    # (сигнальная логика это уже гарантирует — здесь последний рубеж)
+    if direction == "long" and price <= level_price:
+        return None, f"цена {price:.4f} не выше уровня {level_price:.4f} — лонг отклонён"
+    if direction == "short" and price >= level_price:
+        return None, f"цена {price:.4f} не ниже уровня {level_price:.4f} — шорт отклонён"
+
     if direction == "long":
         sl = level_price * (1 - cfg.SL_BUFFER_PCT)
         if sl >= price:
-            return None, f"стоп {sl:.4f} не ниже цены {price:.4f}"
-        tp = price + cfg.RISK_REWARD * (price - sl)
-        side = "Buy"
+            return None, f"стоп {sl:.4f} не ниже цены {price:.4f} — сигнал отклонён"
     else:
         sl = level_price * (1 + cfg.SL_BUFFER_PCT)
         if sl <= price:
-            return None, f"стоп {sl:.4f} не выше цены {price:.4f}"
-        tp = price - cfg.RISK_REWARD * (sl - price)
-        side = "Sell"
+            return None, f"стоп {sl:.4f} не выше цены {price:.4f} — сигнал отклонён"
+
+    min_dist = cfg.MIN_SL_PCT * price
+    if atr is not None and math.isfinite(atr) and atr > 0:
+        min_dist = max(min_dist, cfg.MIN_SL_ATR_MULT * atr)
+    if abs(price - sl) < min_dist:
+        old_sl = sl
+        sl = price - min_dist if direction == "long" else price + min_dist
+        log.info("%s: стоп %.6f ближе минимума %.6f — отодвинут до %.6f",
+                 symbol, old_sl, min_dist, sl)
+
+    dist = abs(price - sl)
+    if direction == "long":
+        tp, side = price + cfg.RISK_REWARD * dist, "Buy"
+    else:
+        tp, side = price - cfg.RISK_REWARD * dist, "Sell"
 
     risk_usdt = balance * cfg.RISK_PER_TRADE
-    qty = risk_usdt / abs(price - sl)
+    qty = risk_usdt / dist
+
+    cap = balance * cfg.MAX_POS_NOTIONAL_PCT
+    total_room = balance * cfg.MAX_TOTAL_NOTIONAL_PCT - open_notional
+    cap = min(cap, total_room)
+    if cap <= 0:
+        return None, (f"суммарный notional {open_notional:.0f} USDT исчерпал лимит "
+                      f"{cfg.MAX_TOTAL_NOTIONAL_PCT:.0%} баланса")
+    if qty * price > cap:
+        qty = cap / price
+        risk_usdt = qty * dist  # фактический риск после капа
+
     qty = math.floor(qty / qty_step) * qty_step
     qty = round(qty, 10)
     if qty < min_qty:
@@ -64,6 +100,7 @@ class RiskState:
     def __init__(self, state_path: Path):
         self.path = state_path
         self.open_symbols: set[str] = set()
+        self.open_sides: dict[str, str] = {}         # symbol -> 'Buy' | 'Sell'
         self.consec_stops = 0
         self.kill_switch_day: str | None = None      # 'YYYY-MM-DD' (UTC), день запрета
         self.cooldown_until: dict[str, str] = {}     # symbol -> ISO-время конца кулдауна
@@ -118,7 +155,7 @@ class RiskState:
 
     # ---------- проверка допуска ----------
 
-    def can_open(self, symbol: str, now: datetime) -> tuple[bool, str]:
+    def can_open(self, symbol: str, now: datetime, direction: str | None = None) -> tuple[bool, str]:
         self.maybe_reset_day()
         if self.kill_switch_day == self._today():
             return False, "kill switch: дневной лимит стопов исчерпан"
@@ -129,4 +166,12 @@ class RiskState:
         until_iso = self.cooldown_until.get(symbol)
         if until_iso and now < datetime.fromisoformat(until_iso):
             return False, f"кулдаун до {until_iso}"
+        if direction is not None:
+            # корреляция мажоров: однонаправленные позиции считаем одной ставкой
+            side = "Buy" if direction == "long" else "Sell"
+            same = sum(1 for s in self.open_sides.values() if s == side)
+            if (same + 1) * cfg.RISK_PER_TRADE > cfg.MAX_DIRECTION_RISK + 1e-9:
+                return False, (f"риск на направление: {same} открытых {side} x "
+                               f"{cfg.RISK_PER_TRADE:.0%} + новая позиция > "
+                               f"лимита {cfg.MAX_DIRECTION_RISK:.1%}")
         return True, ""

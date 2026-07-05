@@ -74,22 +74,25 @@ class Notifier:
 
 def fmt_signal(s: SignalCheck) -> str:
     arrow = "🟢 LONG" if s.direction == "long" else "🔴 SHORT"
+    setup = "пробой" if s.setup_type == "breakout" else "отбой"
     candle_close = s.ts.to_pydatetime() + timedelta(minutes=int(s.tf))
     lines = [
-        f"{arrow} сигнал {s.symbol} ({s.tf}m)",
+        f"{arrow} сигнал {s.symbol} ({s.tf}m, {setup})",
         f"Свеча: {_local(s.ts.to_pydatetime())}–{_local(candle_close)} {cfg.NOTIFY_TZ_LABEL}",
         f"Цена: {s.close}",
-        f"Объём: x{s.vol_ratio:.2f} от SMA{cfg.VOL_SMA_PERIOD}",
+        f"Объём: x{s.vol_ratio:.2f} от SMA{cfg.VOL_SMA_PERIOD} ({s.bar_dir}-свеча)",
         f"Уровень: {s.level_kind} {s.level_price:.2f}"
         + (" (пробой)" if s.breakout else f" (дист. {s.level_dist_pct:.2%})"),
         f"MACD: крест {s.cross_dir}/{s.cross_age} св. назад, импульс: {s.hist_impulse or '—'}",
-        f"Фильтр 4h: {s.trend_4h}",
+        f"EMA 15m: {cfg.LOCAL_EMA_FAST}={s.ema_fast_15m:.2f} / {cfg.LOCAL_EMA_SLOW}={s.ema_slow_15m:.2f}",
+        f"Фильтр 4h: {s.trend_4h} (close {s.close_4h:.2f} vs EMA{cfg.TREND_EMA_PERIOD} {s.ema_4h:.2f}, "
+        f"свеча {_local(s.ts_4h.to_pydatetime())} {cfg.NOTIFY_TZ_LABEL})",
     ]
     return "\n".join(lines)
 
 
 PLAN_HEADS = {
-    "dry_run": "📋 [DRY-RUN] Сделка НЕ открыта (режим сигналов)",
+    "dry_run": "📋 [DRY-RUN] Открыта виртуальная позиция (реальный ордер НЕ выставлен)",
     "watch_only": "👀 [WATCH-ONLY] Наблюдаемый символ, торговля по нему выключена",
     "opened": "✅ Открыта сделка (демо)",
 }

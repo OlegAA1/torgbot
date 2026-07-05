@@ -5,3 +5,4 @@ __pycache__/
 logs/
 journal/
 state.json
+paper_positions.json

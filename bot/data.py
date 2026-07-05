@@ -36,6 +36,10 @@ class MarketData:
         self._lock = threading.Lock()
         self._ws: WebSocket | None = None
         self._last_ws_msg = time.time()
+        # (symbol, interval) -> start последнего поставленного в очередь бара:
+        # WS после реконнекта/повторной подписки может прислать бар дважды,
+        # что раньше давало двойную отправку одинаковых сигналов
+        self._last_queued: dict[tuple[str, str], int] = {}
 
     # ---------- REST ----------
 
@@ -83,6 +87,11 @@ class MarketData:
             for bar in msg.get("data", []):
                 if not bar.get("confirm"):
                     continue  # сигналы по незакрытой свече запрещены
+                key, start = (symbol, interval), int(bar["start"])
+                if self._last_queued.get(key, -1) >= start:
+                    log.info("дубль закрытого бара %s %sm start=%s — пропущен", symbol, interval, start)
+                    continue
+                self._last_queued[key] = start
                 self._append_bar(symbol, interval, bar)
                 self.closed_bars.put((symbol, interval))
         except Exception:

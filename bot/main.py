@@ -11,7 +11,7 @@ import logging
 import queue
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -23,6 +23,7 @@ from bot import notifier, risk, signals
 from bot.data import MarketData
 from bot.executor import Executor
 from bot.journal import Journal, utcnow
+from bot.paper import PaperBroker
 
 ROOT = Path(__file__).resolve().parent.parent
 log = logging.getLogger("bot")
@@ -70,14 +71,25 @@ class Bot:
         self.executor = Executor(self.http)
         self.journal = Journal(ROOT / cfg.JOURNAL_DIR)
         self.risk = risk.RiskState(ROOT / cfg.STATE_FILE)
+        self.paper = PaperBroker(ROOT / cfg.PAPER_FILE)
+        self.dedup = signals.Deduper()
         # symbol -> метаданные открытой сделки (для итога в trades.csv)
         self.tracked: dict[str, dict] = {}
+        # symbol -> ts последней обработанной свечи (защита от дублей)
+        self._processed: dict[str, pd.Timestamp] = {}
         self._last_sync = 0.0
+        if cfg.DRY_RUN:
+            # виртуальные позиции участвуют в риск-лимитах наравне с реальными
+            for sym, p in self.paper.positions.items():
+                self.risk.open_symbols.add(sym)
+                self.risk.open_sides[sym] = p["side"]
 
     # ---------- позиции ----------
 
     def sync_positions(self) -> None:
         """Сверка с биржей: подхват позиций после рестарта + фиксация закрытий."""
+        if cfg.DRY_RUN:
+            return  # в dry-run позиции виртуальные (PaperBroker), с биржей не сверяемся
         if not self.has_keys:
             return
         try:
@@ -106,6 +118,7 @@ class Bot:
             self._register_close(symbol, self.tracked.pop(symbol))
 
         self.risk.open_symbols = set(on_exchange)
+        self.risk.open_sides = {sym: p["side"] for sym, p in on_exchange.items()}
 
     def _register_close(self, symbol: str, meta: dict) -> None:
         closed_at = utcnow()
@@ -144,19 +157,62 @@ class Bot:
                 return name.upper()
         return "manual/other"
 
+    def _register_paper_close(self, c: dict) -> None:
+        """Итог виртуальной сделки: журнал, кулдаун/kill switch, уведомление."""
+        self.journal.log_trade_closed(
+            opened_ts=c["opened_ts"], closed_ts=c["closed_ts"],
+            symbol=c["symbol"], side=c["side"], qty=c["qty"],
+            entry=c["entry"], exit_price=c["exit"],
+            sl=c["sl"], tp=c["tp"],
+            pnl=c["pnl"], close_reason=f"paper_{c['reason']}",
+        )
+        kill_before = self.risk.kill_switch_day
+        self.risk.on_trade_closed(c["symbol"], c["pnl"], c["closed_ts"])
+        self.risk.open_symbols.discard(c["symbol"])
+        self.risk.open_sides.pop(c["symbol"], None)
+        if cfg.NOTIFY_TRADES:
+            duration = (c["closed_ts"] - c["opened_ts"]).total_seconds() / 60
+            self.notify.send("📋 [DRY-RUN] "
+                             + notifier.fmt_close(c["symbol"], c["side"], c["pnl"],
+                                                  c["reason"], duration))
+            if self.risk.kill_switch_day and self.risk.kill_switch_day != kill_before:
+                self.notify.send(notifier.fmt_kill_switch(self.risk.kill_switch_day))
+
     # ---------- обработка закрытой свечи ----------
 
     def on_closed_bar(self, symbol: str) -> None:
         df15 = self.market.df(symbol, cfg.SIGNAL_TF)
         df4h = self.market.df(symbol, cfg.TREND_TF)
+
+        bar_ts = df15.index[-1]
+        if self._processed.get(symbol) == bar_ts:
+            log.info("свеча %s %s уже обработана — дубль пропущен", symbol, bar_ts)
+            return
+        self._processed[symbol] = bar_ts
+
+        if cfg.DRY_RUN and symbol not in cfg.WATCH_ONLY_SYMBOLS:
+            bar = df15.iloc[-1]
+            bar_close_time = bar_ts.to_pydatetime() + timedelta(minutes=int(cfg.SIGNAL_TF))
+            closed = self.paper.check_bar(symbol, float(bar["high"]), float(bar["low"]),
+                                          bar_close_time)
+            if closed:
+                self._register_paper_close(closed)
+
+        self.dedup.release_far(symbol, float(df15["close"].iloc[-1]))
         s = signals.check(symbol, df15, df4h)
 
         if s.direction is None:
             self.journal.log_check(s)
             return
 
-        log.info("СИГНАЛ %s %s @ %.4f | vol_ratio=%.2f уровень=%s(%s) dist=%.2f%% cross=%s/%s импульс=%s 4h=%s",
-                 s.direction.upper(), symbol, s.close, s.vol_ratio,
+        if self.dedup.is_dup(symbol, s.direction, s.level_price, s.ts):
+            log.info("сигнал %s %s у уровня %.4f — дубль недавнего, пропущен",
+                     s.direction, symbol, s.level_price)
+            self.journal.log_check(s, skip_reason="dedup: повтор сигнала по тому же уровню")
+            return
+
+        log.info("СИГНАЛ %s %s @ %.4f | %s vol_ratio=%.2f уровень=%s(%s) dist=%.2f%% cross=%s/%s импульс=%s 4h=%s",
+                 s.direction.upper(), symbol, s.close, s.setup_type, s.vol_ratio,
                  s.level_price, s.level_kind, (s.level_dist_pct or 0) * 100,
                  s.cross_dir, s.cross_age, s.hist_impulse, s.trend_4h)
         if cfg.NOTIFY_SIGNALS:
@@ -167,7 +223,7 @@ class Bot:
             inst = self.executor.instruments[symbol]
             plan, _ = risk.build_plan(symbol, s.direction, s.close, s.level_price,
                                       cfg.FALLBACK_BALANCE_USDT,
-                                      inst["qty_step"], inst["min_qty"])
+                                      inst["qty_step"], inst["min_qty"], atr=s.atr)
             if plan is not None:
                 log.info("[WATCH-ONLY] %s %s qty=%s SL=%s TP=%s",
                          plan.side, symbol, plan.qty, plan.stop_loss, plan.take_profit)
@@ -180,7 +236,7 @@ class Bot:
                 self.journal.log_check(s, skip_reason="watch_only")
             return
 
-        allowed, deny = self.risk.can_open(symbol, utcnow())
+        allowed, deny = self.risk.can_open(symbol, utcnow(), s.direction)
         if not allowed:
             log.info("сделка не открыта: %s", deny)
             if cfg.NOTIFY_SIGNALS:
@@ -195,9 +251,15 @@ class Bot:
             except Exception:
                 log.exception("не удалось получить баланс — использую FALLBACK")
 
+        if cfg.DRY_RUN:
+            open_notional = self.paper.total_notional()
+        else:
+            open_notional = sum(m["qty"] * m["entry"] for m in self.tracked.values())
+
         inst = self.executor.instruments[symbol]
         plan, deny = risk.build_plan(symbol, s.direction, s.close, s.level_price,
-                                     balance, inst["qty_step"], inst["min_qty"])
+                                     balance, inst["qty_step"], inst["min_qty"],
+                                     atr=s.atr, open_notional=open_notional)
         if plan is None:
             log.info("сделка не открыта: %s", deny)
             if cfg.NOTIFY_SIGNALS:
@@ -206,8 +268,11 @@ class Bot:
             return
 
         if cfg.DRY_RUN:
-            log.info("[DRY-RUN] %s %s qty=%s SL=%s TP=%s (риск %.2f USDT)",
+            log.info("[DRY-RUN] %s %s qty=%s SL=%s TP=%s (риск %.2f USDT) — виртуальная позиция",
                      plan.side, symbol, plan.qty, plan.stop_loss, plan.take_profit, plan.risk_usdt)
+            self.paper.open(plan, utcnow())
+            self.risk.open_symbols.add(symbol)
+            self.risk.open_sides[symbol] = plan.side
             if cfg.NOTIFY_SIGNALS:
                 self.notify.send(notifier.fmt_plan(plan, "dry_run"))
             self.journal.log_check(s, trade_opened=False, skip_reason="dry_run",
@@ -226,6 +291,7 @@ class Bot:
                 "sl": plan.stop_loss, "tp": plan.take_profit, "opened_ts": utcnow(),
             }
             self.risk.open_symbols.add(symbol)
+            self.risk.open_sides[symbol] = plan.side
         self.journal.log_check(s, trade_opened=opened,
                                skip_reason="" if opened else "ошибка API при выставлении ордера",
                                qty=plan.qty, entry=plan.entry,

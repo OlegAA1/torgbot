@@ -15,9 +15,12 @@ from bot.signals import SignalCheck
 log = logging.getLogger("bot.journal")
 
 SIGNAL_FIELDS = [
-    "ts", "symbol", "tf", "close", "vol_ratio",
+    "ts", "symbol", "tf", "close", "vol_ratio", "bar_dir",
     "macd", "macd_signal", "hist", "cross_dir", "cross_age", "hist_impulse",
-    "trend_4h", "level_price", "level_kind", "level_dist_pct", "breakout",
+    "atr", "ema_fast_15m", "ema_slow_15m",
+    "trend_4h", "ema_4h", "close_4h", "ts_4h",
+    "level_price", "level_kind", "level_dist_pct", "price_vs_level",
+    "breakout", "setup_type",
     "direction", "reasons", "trade_opened", "skip_reason",
     "qty", "entry", "stop_loss", "take_profit",
 ]
@@ -40,12 +43,12 @@ class Journal:
     @staticmethod
     def _ensure_header(path: Path, fields: list[str]) -> None:
         if not path.exists() or path.stat().st_size == 0:
-            with path.open("w", newline="") as f:
+            with path.open("w", newline="", encoding="utf-8") as f:
                 csv.writer(f).writerow(fields)
 
     @staticmethod
     def _append(path: Path, fields: list[str], row: dict) -> None:
-        with path.open("a", newline="") as f:
+        with path.open("a", newline="", encoding="utf-8") as f:
             csv.DictWriter(f, fieldnames=fields).writerow(row)
 
     def log_check(self, s: SignalCheck, trade_opened: bool = False,
@@ -55,13 +58,23 @@ class Journal:
         self._append(self.signals_path, SIGNAL_FIELDS, {
             "ts": s.ts.isoformat(), "symbol": s.symbol, "tf": s.tf,
             "close": s.close, "vol_ratio": round(s.vol_ratio, 4) if s.vol_ratio == s.vol_ratio else "",
+            "bar_dir": s.bar_dir or "",
             "macd": round(s.macd, 6), "macd_signal": round(s.macd_signal, 6),
             "hist": round(s.hist, 6),
             "cross_dir": s.cross_dir or "", "cross_age": s.cross_age if s.cross_age is not None else "",
-            "hist_impulse": s.hist_impulse or "", "trend_4h": s.trend_4h,
+            "hist_impulse": s.hist_impulse or "",
+            "atr": round(s.atr, 6) if s.atr is not None and s.atr == s.atr else "",
+            "ema_fast_15m": round(s.ema_fast_15m, 6) if s.ema_fast_15m is not None else "",
+            "ema_slow_15m": round(s.ema_slow_15m, 6) if s.ema_slow_15m is not None else "",
+            "trend_4h": s.trend_4h,
+            "ema_4h": round(s.ema_4h, 6) if s.ema_4h is not None else "",
+            "close_4h": s.close_4h if s.close_4h is not None else "",
+            "ts_4h": s.ts_4h.isoformat() if s.ts_4h is not None else "",
             "level_price": s.level_price or "", "level_kind": s.level_kind or "",
             "level_dist_pct": round(s.level_dist_pct, 5) if s.level_dist_pct is not None else "",
-            "breakout": s.breakout, "direction": s.direction or "",
+            "price_vs_level": s.price_vs_level or "",
+            "breakout": s.breakout, "setup_type": s.setup_type or "",
+            "direction": s.direction or "",
             "reasons": "; ".join(s.reasons),
             "trade_opened": trade_opened, "skip_reason": skip_reason,
             "qty": qty or "", "entry": entry or "", "stop_loss": sl or "", "take_profit": tp or "",
