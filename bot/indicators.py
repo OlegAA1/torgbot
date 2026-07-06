@@ -86,6 +86,19 @@ class Level:
     age: int = 0   # свечей от последнего пивота кластера до последней закрытой
 
 
+def _fractal_pivots(d: pd.DataFrame) -> list[tuple[float, str, int]]:
+    """Фрактальные экстремумы: (цена, 'resistance'|'support', индекс бара в d)."""
+    w = cfg.SR_FRACTAL_WING
+    highs, lows = d["high"].to_numpy(), d["low"].to_numpy()
+    raw: list[tuple[float, str, int]] = []
+    for i in range(w, len(d) - w):
+        if highs[i] == highs[i - w:i + w + 1].max() and (highs[i] > highs[i - w:i]).all() and (highs[i] > highs[i + 1:i + w + 1]).all():
+            raw.append((float(highs[i]), "resistance", i))
+        if lows[i] == lows[i - w:i + w + 1].min() and (lows[i] < lows[i - w:i]).all() and (lows[i] < lows[i + 1:i + w + 1]).all():
+            raw.append((float(lows[i]), "support", i))
+    return raw
+
+
 def sr_levels(df: pd.DataFrame) -> list[Level]:
     """Фрактальные уровни за последние SR_LOOKBACK свечей.
 
@@ -98,20 +111,11 @@ def sr_levels(df: pd.DataFrame) -> list[Level]:
     свеча в переклассификации не участвует — её пробой обрабатывается
     в сигнальной логике как breakout.
     """
-    w = cfg.SR_FRACTAL_WING
     d = df.iloc[-cfg.SR_LOOKBACK:]
-    highs, lows = d["high"].to_numpy(), d["low"].to_numpy()
     closes = d["close"].to_numpy()
     n = len(d)
 
-    raw: list[tuple[float, str, int]] = []
-    for i in range(w, n - w):
-        if highs[i] == highs[i - w:i + w + 1].max() and (highs[i] > highs[i - w:i]).all() and (highs[i] > highs[i + 1:i + w + 1]).all():
-            raw.append((float(highs[i]), "resistance", i))
-        if lows[i] == lows[i - w:i + w + 1].min() and (lows[i] < lows[i - w:i]).all() and (lows[i] < lows[i + 1:i + w + 1]).all():
-            raw.append((float(lows[i]), "support", i))
-
-    raw.sort(key=lambda x: x[0])
+    raw = sorted(_fractal_pivots(d), key=lambda x: x[0])
     levels: list[Level] = []
     cluster: list[tuple[float, str, int]] = []
 
@@ -142,6 +146,35 @@ def sr_levels(df: pd.DataFrame) -> list[Level]:
         cluster.append((p, k, i))
     flush()
     return levels
+
+
+def nearest_obstacle(df: pd.DataFrame, price: float, direction: str) -> float | None:
+    """Ближайшее препятствие для тейка: кластер пивот-high выше цены (long)
+    или пивот-low ниже цены (short).
+
+    В отличие от sr_levels — без срока жизни и переклассификации: для тейка
+    старые уровни как раз важны (память рынка), а фильтровать входы они не могут.
+    """
+    d = df.iloc[-cfg.SR_LOOKBACK:]
+    kind = "resistance" if direction == "long" else "support"
+    prices = sorted(p for p, k, _ in _fractal_pivots(d) if k == kind)
+    if not prices:
+        return None
+
+    clusters: list[float] = []
+    cluster: list[float] = []
+    for p in prices:
+        if cluster and (p - cluster[0]) / cluster[0] > cfg.SR_CLUSTER_PCT:
+            clusters.append(float(np.mean(cluster)))
+            cluster = []
+        cluster.append(p)
+    clusters.append(float(np.mean(cluster)))
+
+    if direction == "long":
+        ups = [c for c in clusters if c > price]
+        return min(ups) if ups else None
+    downs = [c for c in clusters if c < price]
+    return max(downs) if downs else None
 
 
 def nearest_level(levels: list[Level], price: float, kind: str) -> tuple[Level | None, float]:

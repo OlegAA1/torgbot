@@ -223,7 +223,8 @@ class Bot:
             inst = self.executor.instruments[symbol]
             plan, _ = risk.build_plan(symbol, s.direction, s.close, s.level_price,
                                       cfg.FALLBACK_BALANCE_USDT,
-                                      inst["qty_step"], inst["min_qty"], atr=s.atr)
+                                      inst["qty_step"], inst["min_qty"],
+                                      atr=s.atr, tp_obstacle=s.tp_obstacle)
             if plan is not None:
                 log.info("[WATCH-ONLY] %s %s qty=%s SL=%s TP=%s",
                          plan.side, symbol, plan.qty, plan.stop_loss, plan.take_profit)
@@ -259,7 +260,8 @@ class Bot:
         inst = self.executor.instruments[symbol]
         plan, deny = risk.build_plan(symbol, s.direction, s.close, s.level_price,
                                      balance, inst["qty_step"], inst["min_qty"],
-                                     atr=s.atr, open_notional=open_notional)
+                                     atr=s.atr, open_notional=open_notional,
+                                     tp_obstacle=s.tp_obstacle)
         if plan is None:
             log.info("сделка не открыта: %s", deny)
             if cfg.NOTIFY_SIGNALS:

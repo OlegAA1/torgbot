@@ -48,6 +48,7 @@ class SignalCheck:
     level_dist_pct: float | None = None
     breakout: bool = False
     setup_type: str | None = None     # 'bounce' (отбой) | 'breakout' (пробой)
+    tp_obstacle: float | None = None  # ближайший старый пивот по ходу сделки (цель TP)
     price_vs_level: str | None = None # 'above' | 'below'
     direction: str | None = None      # 'long' | 'short' | None — итог
     reasons: list[str] = field(default_factory=list)  # почему сигнала нет
@@ -182,11 +183,17 @@ def check(symbol: str, df_15: pd.DataFrame, df_4h: pd.DataFrame) -> SignalCheck:
                 + (f" (ближайший {lv.kind} {lv.price:.2f}, {dist:.2%})" if lv else "")
             )
             continue
+        if breakout and dist > cfg.BREAKOUT_MAX_DIST_PCT:
+            res.reasons.append(
+                f"{direction}: пробой поздний — закрытие в {dist:.2%} от уровня "
+                f"(лимит {cfg.BREAKOUT_MAX_DIST_PCT:.1%})")
+            continue
         res.direction = direction
         res.level_price, res.level_kind = lv.price, lv.kind
         res.level_dist_pct, res.breakout = dist, breakout
         res.setup_type = "breakout" if breakout else "bounce"
         res.price_vs_level = "above" if close > lv.price else "below"
+        res.tp_obstacle = ind.nearest_obstacle(df_15, close, direction)
         break
 
     return res

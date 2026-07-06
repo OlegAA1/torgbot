@@ -35,13 +35,18 @@ class TradePlan:
 
 def build_plan(symbol: str, direction: str, price: float, level_price: float,
                balance: float, qty_step: float, min_qty: float,
-               atr: float | None = None, open_notional: float = 0.0) -> tuple[TradePlan | None, str]:
+               atr: float | None = None, open_notional: float = 0.0,
+               tp_obstacle: float | None = None) -> tuple[TradePlan | None, str]:
     """Размер позиции = риск / расстояние до стопа. Возвращает (план, причина отказа).
 
     Стоп ближе max(MIN_SL_ATR_MULT*ATR, MIN_SL_PCT*цена) отодвигается до минимума
     (qty при этом пересчитывается). Notional капится: одна позиция <=
     MAX_POS_NOTIONAL_PCT баланса, все вместе <= MAX_TOTAL_NOTIONAL_PCT
     (open_notional — сумма qty*entry уже открытых позиций).
+
+    Тейк: RISK_REWARD*R, но при USE_STRUCT_TP не дальше tp_obstacle (ближайший
+    старый пивот по ходу сделки) минус буфер; если такой тейк ближе MIN_TP_RR*R —
+    сделка не открывается (потенциал не окупает риск).
     """
     # сторона уровня: лонг только над уровнем, шорт только под ним
     # (сигнальная логика это уже гарантирует — здесь последний рубеж)
@@ -73,6 +78,27 @@ def build_plan(symbol: str, direction: str, price: float, level_price: float,
         tp, side = price + cfg.RISK_REWARD * dist, "Buy"
     else:
         tp, side = price - cfg.RISK_REWARD * dist, "Sell"
+
+    # структурный тейк: не целимся сквозь ближайшее препятствие
+    if cfg.USE_STRUCT_TP and tp_obstacle is not None:
+        if direction == "long":
+            struct_tp = tp_obstacle * (1 - cfg.STRUCT_TP_BUFFER_PCT)
+            if struct_tp < tp:
+                if struct_tp - price < cfg.MIN_TP_RR * dist:
+                    return None, (f"препятствие {tp_obstacle:.6f} слишком близко: "
+                                  f"TP < {cfg.MIN_TP_RR}R — потенциал не окупает риск")
+                log.info("%s: TP срезан препятствием %.6f: %.6f -> %.6f",
+                         symbol, tp_obstacle, tp, struct_tp)
+                tp = struct_tp
+        else:
+            struct_tp = tp_obstacle * (1 + cfg.STRUCT_TP_BUFFER_PCT)
+            if struct_tp > tp:
+                if price - struct_tp < cfg.MIN_TP_RR * dist:
+                    return None, (f"препятствие {tp_obstacle:.6f} слишком близко: "
+                                  f"TP < {cfg.MIN_TP_RR}R — потенциал не окупает риск")
+                log.info("%s: TP срезан препятствием %.6f: %.6f -> %.6f",
+                         symbol, tp_obstacle, tp, struct_tp)
+                tp = struct_tp
 
     risk_usdt = balance * cfg.RISK_PER_TRADE
     qty = risk_usdt / dist

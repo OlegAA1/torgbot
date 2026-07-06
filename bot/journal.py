@@ -20,7 +20,7 @@ SIGNAL_FIELDS = [
     "atr", "ema_fast_15m", "ema_slow_15m",
     "trend_4h", "ema_4h", "close_4h", "ts_4h",
     "level_price", "level_kind", "level_dist_pct", "price_vs_level",
-    "breakout", "setup_type",
+    "breakout", "setup_type", "tp_obstacle",
     "direction", "reasons", "trade_opened", "skip_reason",
     "qty", "entry", "stop_loss", "take_profit",
 ]
@@ -74,6 +74,7 @@ class Journal:
             "level_dist_pct": round(s.level_dist_pct, 5) if s.level_dist_pct is not None else "",
             "price_vs_level": s.price_vs_level or "",
             "breakout": s.breakout, "setup_type": s.setup_type or "",
+            "tp_obstacle": s.tp_obstacle or "",
             "direction": s.direction or "",
             "reasons": "; ".join(s.reasons),
             "trade_opened": trade_opened, "skip_reason": skip_reason,
